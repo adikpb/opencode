@@ -1,7 +1,7 @@
 import { existsSync } from "fs"
 import path from "path"
 import { render, useRenderer, useTerminalDimensions } from "@opentui/solid"
-import { registerOpencodeSpinner } from "./component/register-spinner"
+import "./component/spinner-renderable"
 import { Effect, Latch } from "effect"
 import { Service, type Endpoint } from "@opencode/client/effect/service"
 import { OpenCode, type SessionInfo } from "@opencode/client"
@@ -109,8 +109,6 @@ import { SessionTerminalsProvider } from "./context/session-terminals"
 import { PanelProvider, usePanel } from "./context/panel"
 import { SessionFrame } from "./component/session-frame"
 import { createTuiClipboard } from "./clipboard"
-
-registerOpencodeSpinner()
 
 const appGlobalBindingCommands = ["session.list", "session.new", "open.menu"] as const
 
@@ -253,7 +251,11 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
         if (handoff) {
           handoff.renderer.useMouse = options.useMouse
           return yield* Effect.acquireRelease(Effect.succeed(handoff.renderer), (renderer) =>
-            Effect.sync(() => destroyRenderer(renderer)),
+            Effect.promise(async () => {
+              destroyRenderer(renderer)
+              // closed rejects when the terminal is gone or the final flush times out; nothing is left to restore.
+              await renderer.closed.catch(() => {})
+            }),
           )
         }
         if (process.env.OPENCODE_DRIVE) {
@@ -265,7 +267,11 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
             try: () => createCliRenderer(options),
             catch: (error) => (error instanceof Error ? error : new Error(String(error))),
           }),
-          (renderer) => Effect.sync(() => destroyRenderer(renderer)),
+          (renderer) =>
+            Effect.promise(async () => {
+              destroyRenderer(renderer)
+              await renderer.closed.catch(() => {})
+            }),
         )
       })
       renderer.setMaxListeners(15)
@@ -1163,8 +1169,8 @@ function App() {
         category: "System",
         palette: undefined,
         enabled: process.platform !== "win32",
-        run: () => {
-          renderer.suspend()
+        run: async () => {
+          await renderer.suspend()
           process.once("SIGCONT", () => renderer.resume())
           process.kill(0, "SIGTSTP")
         },
